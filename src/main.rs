@@ -1,31 +1,21 @@
-// Importamos las herramientas de registro (logging)
-use log::{error, info, warn};
-// Importamos el motor de errores estándar para el retorno de main
+use log::info;
 use std::error::Error;
+
+// Declaramos que existe un módulo llamado 'network'
+mod network;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // 1. Inicializamos el logger.
-    // Esto lee la configuración de la variable de entorno RUST_LOG.
+    // 1. Inicializar Logs (Tarea 1)
     env_logger::init();
+    info!("INICIO: Motor FIX - Estructura Multimodular");
 
-    info!("========================================");
-    info!("INICIO: Motor FIX IC Markets - Fase 1");
-    info!("Tarea 1: Sistema de Diagnóstico Activo");
-    info!("========================================");
+    // 2. Llamar a la conexión (Tarea 2)
+    // Usamos el prefijo 'network::' porque la función está en ese archivo
+    let _stream = network::connect_to_broker().await?;
 
-    // En la próxima tarea (F2), aquí configuraremos el host de Londres
-    let host = "demo-uk-eqx-01.p.c-trader.com";
-    let port = 5201;
-
-    info!("Preparado para conectar a {}:{}", host, port);
-
-    // Este mensaje aparecerá en amarillo en tu terminal
-    warn!("AVISO: El socket TCP aún no está abierto. Esperando Tarea 2.");
-
-    // Aquí irá el bucle principal de nuestra estrategia de 2.6 pips
-
-    info!("Motor cargado correctamente. Listo para ejecución.");
+    info!("Motor listo y conectado. Esperando lógica de mensajes FIX...");
 
     Ok(())
 }
+
