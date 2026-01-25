@@ -4,3 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Para el manejo de logs (Tarea1)
+log = "0.4"
+env_logger = "0.10"
+
+# lo que usaremos en las siguientes tareas de la Fase 1
+tokio = { version = "1.0", features = ["full"]}
+fefix = "0.7"
+chrono = "0.4"
