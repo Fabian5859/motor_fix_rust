@@ -10,5 +10,5 @@ env_logger = "0.10"
 
 # lo que usaremos en las siguientes tareas de la Fase 1
 tokio = { version = "1.0", features = ["full"]}
-fefix = "0.7"
+fefix = { version = "0.7", features = ["full"]}
 chrono = "0.4"
