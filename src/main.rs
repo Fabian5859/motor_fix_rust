@@ -2,21 +2,24 @@ use log::info;
 use std::error::Error;
 
 mod fix_engine;
-mod network; //Declaramos el nuevo modulo
+mod network;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // 1. Inicializar Logs (Tarea 1)
+    // 1. Inicializamos los logs
     env_logger::init();
-    info!("=== MOTOR FIX RUST: FASE 1 - TAREA 3 ===");
+    info!("=== PROYECTO MOTOR FIX - VERIFICACIÓN TAREA 3 ===");
 
-    //1. Instanciamos el motor FIX
-    let mut engine = fix_engine::FixEngine::new();
-    engine.prepare_logon();
+    // 2. Instanciamos el motor FIX (v0.7 oficial)
+    // Esto verifica que el struct FixEngine y el Encoder estén bien configurados
+    let _engine = fix_engine::FixEngine::new();
+    info!("Motor FIX inicializado correctamente siguiendo la documentación oficial.");
 
-    // 2. Conexión de red (Tarea 2)
+    // 3. Probamos la conexión de red (Tarea 2)
+    // Solo para asegurar que el motor y la red pueden coexistir
     let _stream = network::connect_to_broker().await?;
+    info!("¡ÉXITO! El motor está listo y la red está conectada.");
 
-    info!("Estado: Motor inicializado y Socket conectado.");
     Ok(())
 }
+
