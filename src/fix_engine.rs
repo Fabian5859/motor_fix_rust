@@ -1,5 +1,6 @@
-use fefix::prelude::*; // Importante para TagU16
-use fefix::tagvalue::{Config, Encoder, FvWrite};
+use chrono::Utc;
+use fefix::prelude::*;
+use fefix::tagvalue::{Config, Encoder};
 use log::info;
 
 pub struct FixEngine {
@@ -7,7 +8,6 @@ pub struct FixEngine {
 }
 
 impl FixEngine {
-    /// Crea una nueva instancia del motor FIX
     pub fn new() -> Self {
         info!("Inicializando Motor FEFIX v0.7.0");
         Self {
@@ -15,7 +15,6 @@ impl FixEngine {
         }
     }
 
-    /// Construye el mensaje de Logon (MsgType=A) con los tags requeridos por cTrader
     pub fn build_logon(
         &mut self,
         buffer: &mut Vec<u8>,
@@ -25,48 +24,36 @@ impl FixEngine {
         password: &str,
     ) {
         info!("Construyendo mensaje Logon (MsgType=A)...");
-        info!(
-            "SenderCompID: {}, SenderSubID: {}",
-            sender_id, sender_sub_id
-        );
 
-        // Limpiamos el buffer para evitar basura de mensajes anteriores
+        let now = Utc::now().format("%Y%m%d-%H:%M:%S").to_string();
+
+        // EXTRAER EL NÚMERO DE CUENTA (Tag 553 espera un entero)
+        // Si sender_id es "demo.icmarkets.9757924", esto tomará "9757924"
+        let account_number = sender_id.split('.').last().unwrap_or(sender_id);
+
         buffer.clear();
-
-        // Iniciamos el mensaje: Versión FIX.4.4, Buffer de salida, MsgType "A" (Logon)
         let mut msg = self.encoder.start_message(b"FIX.4.4", buffer, b"A");
 
-        // --- CUERPO DEL MENSAJE ---
-
-        // Tag 49: SenderCompID (ID del usuario)
+        // --- HEADER ---
         msg.set_any(TagU16::new(49).unwrap(), sender_id.as_bytes());
-
-        // Tag 56: TargetCompID (Siempre "cServer" para cTrader)
         msg.set_any(TagU16::new(56).unwrap(), target_id.as_bytes());
-
-        // Tag 50: SenderSubID (TRADE o QUOTE según la conexión)
         msg.set_any(TagU16::new(50).unwrap(), sender_sub_id.as_bytes());
-
-        // Tag 34: MsgSeqNum (Iniciamos en 1 para este ejemplo)
+        msg.set_any(TagU16::new(57).unwrap(), sender_sub_id.as_bytes());
         msg.set_any(TagU16::new(34).unwrap(), b"1");
+        msg.set_any(TagU16::new(52).unwrap(), now.as_bytes());
 
-        // Tag 98: EncryptMethod (0 = None/Other)
+        // --- CUERPO ---
         msg.set_any(TagU16::new(98).unwrap(), b"0");
-
-        // Tag 108: HeartBtInt (Intervalo de latido en segundos)
         msg.set_any(TagU16::new(108).unwrap(), b"30");
 
-        // Tag 554: Password (Credencial de la API FIX)
-        msg.set_any(TagU16::new(554).unwrap(), password.as_bytes());
+        // AQUÍ ESTÁ EL CAMBIO:
+        info!("Usando Username (Tag 553): {}", account_number);
+        msg.set_any(TagU16::new(553).unwrap(), account_number.as_bytes());
 
-        // Tag 141: ResetSeqNumFlag (Y = Reiniciar secuencia a 1)
-        // Es muy recomendable ponerlo en 'Y' para el primer logon del día
+        msg.set_any(TagU16::new(554).unwrap(), password.as_bytes());
         msg.set_any(TagU16::new(141).unwrap(), b"Y");
 
-        // Finaliza el mensaje calculando el Checksum y el BodyLength automáticamente
         msg.wrap();
-
-        info!("Mensaje Logon construido exitosamente.");
+        info!("Logon construido. Cruzando los dedos por el Tag 553 numérico.");
     }
 }
-
