@@ -2,22 +2,27 @@ use log::{error, info};
 use std::error::Error;
 use tokio::net::TcpStream;
 
-/// Establece la conexión TCP con el servidor de IC Markets
-pub async fn connect_to_broker() -> Result<TcpStream, Box<dyn Error>> {
-    let host = "demo-uk-eqx-01.p.c-trader.com";
-    let port = "5201";
-    let address = format!("{}:{}", host, port);
+/// Establece una conexión TCP con el broker.
+/// Recibe el host y el puerto como strings para permitir configuración dinámica.
+pub async fn connect_to_broker(host: &str, port: &str) -> Result<TcpStream, Box<dyn Error>> {
+    // Combinamos host y puerto en una sola dirección (ej: "demo-uk-eqx-01.p.c-trader.com:5202")
+    let addr = format!("{}:{}", host, port);
 
-    info!("Intentando conectar a Londres: {}...", address);
+    info!("Intentando conectar a la dirección TCP: {}...", addr);
 
-    match TcpStream::connect(&address).await {
+    // Intentamos establecer la conexión
+    match TcpStream::connect(&addr).await {
         Ok(stream) => {
-            info!("¡ÉXITO! Conexión TCP establecida.");
+            info!("¡ÉXITO! Conexión TCP establecida con el servidor de cTrader.");
             Ok(stream)
         }
         Err(e) => {
-            error!("FALLO de conexión: {}.", e);
+            error!(
+                "Error de red: No se pudo conectar a {}. Verifica tu conexión a internet o el Host/Port.",
+                addr
+            );
             Err(Box::new(e))
         }
     }
 }
+

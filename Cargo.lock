@@ -1021,6 +1021,7 @@ name = "motor_fix_rust"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dotenv",
  "env_logger",
  "fefix",
  "log",

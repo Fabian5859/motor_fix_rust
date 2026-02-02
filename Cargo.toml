@@ -8,6 +8,9 @@ edition = "2024"
 log = "0.4"
 env_logger = "0.10"
 
+# Para leer archivos .env
+dotenv = "0.15.0"
+
 # lo que usaremos en las siguientes tareas de la Fase 1
 tokio = { version = "1.0", features = ["full"]}
 fefix = { version = "0.7", features = ["full"]}
