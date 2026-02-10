@@ -1,5 +1,6 @@
 use dotenv::dotenv;
 use log::{error, info, warn};
+use std::collections::VecDeque;
 use std::env;
 use std::error::Error;
 use std::time::Instant;
@@ -8,10 +9,12 @@ use tokio::time::{Duration, interval};
 
 mod features;
 mod fix_engine;
+mod model;
 mod network;
 mod state;
 
 use features::FeatureCollector;
+use model::LogisticModel;
 use state::OrderBook;
 
 #[tokio::main]
@@ -19,9 +22,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
     env_logger::init();
 
-    info!("=== MOTOR FIX v0.9.5 - IA NORMALIZED DATA ===");
+    info!("=== MOTOR FIX v1.0.0 - IA ONLINE LEARNING ===");
 
-    // 1. Cargar Configuración
+    // 1. Inicialización
+    let mut engine = fix_engine::FixEngine::new();
+    let mut order_book = OrderBook::new();
+    let mut collector = FeatureCollector::new(100);
+    let mut ai_model = LogisticModel::new(4, 0.05); // LR ligeramente más alto para ver cambios rápidos
+    let mut prediction_queue = VecDeque::new();
+
+    let mut last_velocity_calc = Instant::now();
+    let mut tick_count = 0.0;
+    let mut current_velocity = 0.0;
+    let mut msg_count: u64 = 0;
+    let mut mid_price_history: Vec<f64> = Vec::with_capacity(20);
+
+    // 2. Variables de Entorno
     let host = env::var("FIX_HOST")?;
     let port = env::var("FIX_PORT")?;
     let sender_id = env::var("FIX_SENDER_ID")?;
@@ -29,19 +45,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let sub_id = env::var("FIX_SENDER_SUB_ID")?;
     let password = env::var("FIX_PASSWORD")?;
 
-    // 2. Inicializar Componentes de Inteligencia
-    let mut engine = fix_engine::FixEngine::new();
-    let mut order_book = OrderBook::new();
-    let mut collector = FeatureCollector::new(100); // Ventana de 100 eventos
-
-    // Variables de Métricas Temporales
-    let mut last_velocity_calc = Instant::now();
-    let mut tick_count = 0.0;
-    let mut current_velocity = 0.0;
-    let mut msg_count: u64 = 0;
-    let mut mid_price_history: Vec<f64> = Vec::with_capacity(20);
-
-    // 3. Conexión y Sesión
+    // 3. Conexión de Red
     let mut stream = network::connect_to_broker(&host, &port).await?;
     let mut response_buffer = [0u8; 16384];
     let mut seq_num: u64 = 1;
@@ -54,11 +58,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     info!("✅ Sesión FIX Activa.");
     seq_num += 1;
 
-    // --- MARKET DATA REQUEST (Suscripción) ---
+    // --- SUSCRIPCIÓN ---
     let mut md_buffer = Vec::new();
     engine.build_market_data_request(&mut md_buffer, &sender_id, &target_id, seq_num, "1");
     stream.write_all(&md_buffer).await?;
-    info!("📡 Suscripción enviada al Símbolo '1'");
+    info!("📡 Suscripción enviada. Esperando Market Data...");
     seq_num += 1;
 
     let mut hb_timer = interval(Duration::from_secs(25));
@@ -74,7 +78,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             result = stream.read(&mut response_buffer) => {
                 match result {
-                    Ok(0) => { warn!("Conexión terminada por el servidor."); break; }
+                    Ok(0) => { warn!("Conexión cerrada."); break; }
                     Ok(n) => {
                         let raw = String::from_utf8_lossy(&response_buffer[..n]);
                         let messages: Vec<&str> = raw.split("8=FIX.4.4").collect();
@@ -83,39 +87,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             if content.is_empty() { continue; }
                             let msg = content.replace('\x01', "|");
 
+                            // Log de tipo de mensaje para diagnóstico
+                            let msg_type = extract_tag(&msg, "35");
+
+                            // Solo procesamos Market Data (35=W o 35=X)
                             if msg.contains("|35=W|") || msg.contains("|35=X|") {
                                 let entries: Vec<&str> = msg.split("|279=").collect();
 
-                                for (i, entry) in entries.iter().enumerate() {
-                                    if i == 0 { continue; }
+                                for entry in entries.iter().skip(1) {
                                     let fragment = format!("|279={}", entry);
-
-                                    let action_val = extract_tag(&fragment, "279").unwrap_or(0.0);
-                                    let action = if action_val == 2.0 { '2' } else if action_val == 1.0 { '1' } else { '0' };
-                                    let side_val = extract_tag(&fragment, "269").unwrap_or(-1.0);
-                                    let side = if side_val == 0.0 { '0' } else { '1' };
+                                    let side = if extract_tag(&fragment, "269").unwrap_or(-1.0) == 0.0 { '0' } else { '1' };
                                     let price = extract_tag(&fragment, "270").unwrap_or(0.0);
                                     let volume = extract_tag(&fragment, "271").unwrap_or(0.0);
 
-                                    order_book.update(action, side, price, volume);
+                                    order_book.update('1', side, price, volume);
                                     tick_count += 1.0;
                                 }
 
-                                // --- PROCESAMIENTO DE CARACTERÍSTICAS (AI ENGINE) ---
-                                msg_count += 1;
-
-                                // Cálculo de Mid-Price y Volatilidad
                                 if let Some(mid) = order_book.get_mid_price() {
+                                    msg_count += 1;
+
+                                    // 1. Características base
                                     mid_price_history.push(mid);
                                     if mid_price_history.len() > 20 { mid_price_history.remove(0); }
-
                                     let volatility = if mid_price_history.len() > 1 {
                                         let mean = mid_price_history.iter().sum::<f64>() / mid_price_history.len() as f64;
-                                        let variance = mid_price_history.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / mid_price_history.len() as f64;
-                                        variance.sqrt() * 100000.0
+                                        mid_price_history.iter().map(|p| (p - mean).powi(2)).sum::<f64>().sqrt() * 1000.0
                                     } else { 0.0 };
 
-                                    // Cálculo de Velocidad (cada segundo)
                                     let elapsed = last_velocity_calc.elapsed().as_secs_f64();
                                     if elapsed >= 1.0 {
                                         current_velocity = tick_count / elapsed;
@@ -123,23 +122,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         last_velocity_calc = Instant::now();
                                     }
 
-                                    // Alimentar el recolector
+                                    // 2. Normalización
                                     collector.push_features(&order_book, current_velocity, volatility);
+                                    let norm_v = collector.get_standardized_vector();
 
-                                    // --- DIAGNÓSTICO CADA 10 MENSAJES ---
-                                    if msg_count % 10 == 0 {
-                                        let raw_v = collector.get_last_vector();
-                                        let norm_v = collector.get_standardized_vector();
+                                    // 3. APRENDIZAJE ONLINE
+                                    prediction_queue.push_back((norm_v.clone(), mid));
 
-                                        info!("--------------------------------------------------");
-                                        info!("📊 RAW  : {:.4?}", raw_v.to_vec());
-                                        info!("🧪 NORM : {:.4?}", norm_v.to_vec());
+                                    // Procesar entrenamiento cuando la cola tiene al menos 5 mensajes (horizonte corto)
+                                    if prediction_queue.len() > 5 {
+                                        if let Some((old_features, old_price)) = prediction_queue.pop_front() {
+                                            let target = if mid > old_price { 1.0 } else { 0.0 };
+                                            let loss = ai_model.train(&old_features, target);
+
+                                            if msg_count % 5 == 0 {
+                                                let prob = ai_model.predict(&norm_v);
+                                                info!("🤖 PRED: {:.1}% ALZA | LOSS: {:.4} | W: {:.2?}",
+                                                    prob * 100.0, loss, ai_model.weights.to_vec());
+                                            }
+                                        }
                                     }
                                 }
+                            } else if msg.contains("|35=0|") {
+                                // Heartbeat silencioso
+                            } else {
+                                info!("📩 FIX Msg Type: {:?}", msg_type);
                             }
                         }
                     }
-                    Err(e) => { error!("Error en red FIX: {}", e); break; }
+                    Err(e) => { error!("Error FIX: {}", e); break; }
                 }
             }
         }
@@ -148,12 +159,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn extract_tag(msg: &str, tag: &str) -> Option<f64> {
-    let pattern = format!("|{}=", tag);
-    if let Some(start) = msg.find(&pattern) {
-        let val_start = start + pattern.len();
-        let end_offset = msg[val_start..].find('|').unwrap_or(msg[val_start..].len());
-        let val_str = &msg[val_start..val_start + end_offset];
-        return val_str.parse::<f64>().ok();
+    let patterns = [format!("|{}=", tag), format!("{}=", tag)];
+    for pattern in patterns {
+        if let Some(start) = msg.find(&pattern) {
+            let val_start = start + pattern.len();
+            let end_offset = msg[val_start..].find('|').unwrap_or(msg[val_start..].len());
+            let val_str = &msg[val_start..val_start + end_offset];
+            return val_str.parse::<f64>().ok();
+        }
     }
     None
 }
