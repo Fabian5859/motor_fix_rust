@@ -9,7 +9,7 @@ pub struct FixEngine {
 
 impl FixEngine {
     pub fn new() -> Self {
-        info!("Inicializando Motor FEFIX v0.7.0");
+        info!("Inicializando Motor FEFIX v0.7.0 - Deep LOB Config");
         Self {
             encoder: Encoder::<Config>::default(),
         }
@@ -87,15 +87,23 @@ impl FixEngine {
         msg.set_any(TagU16::new(52).unwrap(), now.as_bytes());
 
         msg.set_any(TagU16::new(262).unwrap(), b"REQ_GAUSS_01");
-        msg.set_any(TagU16::new(263).unwrap(), b"1");
-        msg.set_any(TagU16::new(264).unwrap(), b"1");
-        msg.set_any(TagU16::new(265).unwrap(), b"1");
+        msg.set_any(TagU16::new(263).unwrap(), b"1"); // Snapshot + Updates
 
-        msg.set_any(TagU16::new(267).unwrap(), b"2");
+        // --- EL CAMBIO CLAVE ---
+        // b"0" = Full Book / Profundidad Total.
+        // Esto suele forzar al broker a enviar el tag 271 (Volumen).
+        msg.set_any(TagU16::new(264).unwrap(), b"0");
+
+        msg.set_any(TagU16::new(265).unwrap(), b"1"); // Incremental Refresh
+
+        msg.set_any(TagU16::new(267).unwrap(), b"2"); // Número de MDEntryTypes
+
+        // Aquí definimos los tipos que queremos (Bid y Ask)
+        // Nota: fefix manejará los grupos repetitivos internamente al wrappear
         msg.set_any(TagU16::new(269).unwrap(), b"0");
         msg.set_any(TagU16::new(269).unwrap(), b"1");
 
-        msg.set_any(TagU16::new(146).unwrap(), b"1");
+        msg.set_any(TagU16::new(146).unwrap(), b"1"); // NoRelatedSym
         msg.set_any(TagU16::new(55).unwrap(), symbol.as_bytes());
 
         msg.wrap();
