@@ -78,7 +78,6 @@ impl FixEngine {
 
         let mut msg = self.encoder.start_message(b"FIX.4.4", buffer, b"V");
 
-        // Header
         msg.set_any(TagU16::new(49).unwrap(), sender_id.as_bytes());
         msg.set_any(TagU16::new(56).unwrap(), target_id.as_bytes());
         msg.set_any(
@@ -87,19 +86,19 @@ impl FixEngine {
         );
         msg.set_any(TagU16::new(52).unwrap(), now.as_bytes());
 
-        // Body: Request Market Data
-        msg.set_any(TagU16::new(262).unwrap(), b"REQ_GAUSS_01"); // ID único
-        msg.set_any(TagU16::new(263).unwrap(), b"1"); // 1 = Suscribirse
-        msg.set_any(TagU16::new(264).unwrap(), b"1"); // 1 = Full Book (Depth completo)
-        msg.set_any(TagU16::new(265).unwrap(), b"1"); // 1 = Incremental Refresh
+        msg.set_any(TagU16::new(262).unwrap(), b"REQ_GAUSS_01");
+        msg.set_any(TagU16::new(263).unwrap(), b"1");
+        msg.set_any(TagU16::new(264).unwrap(), b"1");
+        msg.set_any(TagU16::new(265).unwrap(), b"1");
 
-        msg.set_any(TagU16::new(267).unwrap(), b"2"); // 2 tipos de entradas:
-        msg.set_any(TagU16::new(269).unwrap(), b"0"); // 0 = Bid
-        msg.set_any(TagU16::new(269).unwrap(), b"1"); // 1 = Ask
+        msg.set_any(TagU16::new(267).unwrap(), b"2");
+        msg.set_any(TagU16::new(269).unwrap(), b"0");
+        msg.set_any(TagU16::new(269).unwrap(), b"1");
 
-        msg.set_any(TagU16::new(146).unwrap(), b"1"); // 1 símbolo solicitado
+        msg.set_any(TagU16::new(146).unwrap(), b"1");
         msg.set_any(TagU16::new(55).unwrap(), symbol.as_bytes());
 
         msg.wrap();
     }
 }
+
