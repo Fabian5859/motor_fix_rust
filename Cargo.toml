@@ -15,3 +15,12 @@ dotenv = "0.15.0"
 tokio = { version = "1.0", features = ["full"]}
 fefix = { version = "0.7", features = ["full"]}
 chrono = "0.4"
+
+
+# --- FASE 3: MACHINE LEARNING & MATH ---
+# Estructuras de datos para álgebra lineal
+ndarray = "0.16.0"
+# Traits para cálculos numéricos genéricos
+num-traits = "0.2.19"
+# Ventanas rodantes y estadísticas (opcional pero muy útil)
+ringbuffer = "0.15.0"

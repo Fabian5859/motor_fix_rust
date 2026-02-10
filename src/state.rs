@@ -33,7 +33,6 @@ impl OrderBook {
                 if volume > 0.0 {
                     target_map.insert(scaled_price, volume);
                     // 2. Limpieza de libro cruzado:
-                    // Si inserto un Bid >= mejor Ask, o un Ask <= mejor Bid, elimino el conflicto
                     opposite_map.remove(&scaled_price);
                 } else {
                     target_map.remove(&scaled_price);
@@ -53,6 +52,14 @@ impl OrderBook {
 
     pub fn get_best_ask(&self) -> Option<f64> {
         self.asks.keys().next().map(|&p| p as f64 / 100000.0)
+    }
+
+    /// Calcula el Mid-Price: (Best Bid + Best Ask) / 2
+    /// Vital para calcular la volatilidad en la Fase 3.
+    pub fn get_mid_price(&self) -> Option<f64> {
+        let bid = self.get_best_bid()?;
+        let ask = self.get_best_ask()?;
+        Some((bid + ask) / 2.0)
     }
 
     pub fn get_imbalance(&self) -> f64 {
