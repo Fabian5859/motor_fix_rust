@@ -14,29 +14,34 @@ mod fix_engine;
 mod gaussian;
 mod id_gen;
 mod network;
-mod state; // NUEVO MODULO
+mod state;
+mod risk; // NUEVO MODULO
 
 use bayesian::BayesianNetwork;
 use brain::BayesianBrain;
 use features::FeatureCollector;
 use gaussian::GaussianFilter;
 use id_gen::IdGenerator;
-use state::OrderBook; // NUEVA ESTRUCTURA
+use state::{OrderBook, TradeStatus}; // Importamos el Enum de estado
+use risk::RiskManager; // Importamos el gestor de riesgo
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
     env_logger::init();
 
-    info!("=== MOTOR FIX v1.4.0 - ORDER FACTORY ACTIVE ===");
+    info!("=== MOTOR FIX v1.4.2 - RISK MANAGER ACTIVE ===");
 
     // 1. Inicialización de Componentes
     let mut engine = fix_engine::FixEngine::new();
     let mut order_book = OrderBook::new();
     let mut collector = FeatureCollector::new(100);
-    let id_factory = IdGenerator::new(); // INSTANCIA DEL GENERADOR DE IDS
+    let id_factory = IdGenerator::new();
+    
+    // Configuramos el Risk Manager: Max 5000 unidades (0.05 lotes)
+    let mut risk_manager = RiskManager::new(5000.0);
 
-    // Arquitectura: 7 Inputs (Price, Vel, Noise, Context + 3 Depth Imbalances), 12 Hidden, 0.01 LR
+    // Arquitectura: 7 Inputs, 12 Hidden, 0.01 LR
     let mut brain = BayesianBrain::new(7, 12, 0.01);
 
     let mut g_filter = GaussianFilter::new(20, 1.5, 1.0);
@@ -152,29 +157,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         "🚫 BLOCKED"
                                                     };
 
-                                                    info!("P: {:.1}% | B-UNCER: {:.2} | RUIDO: {:.2} | CTXT: {:.2} | [{}]",
-                                                          prob * 100.0, brain_uncertainty, noise, context, signal);
+                                                    if signal != "🚫 BLOCKED" && signal != "⏳ WAIT" {
+                                                        info!("P: {:.1}% | B-UNCER: {:.2} | RUIDO: {:.2} | CTXT: {:.2} | [{}]",
+                                                              prob * 100.0, brain_uncertainty, noise, context, signal);
+                                                    }
 
-                                                    // --- SIMULACIÓN DE FÁBRICA DE ÓRDENES ---
+                                                    // --- LÓGICA DE RIESGO Y EJECUCIÓN ---
                                                     if signal == "🚀 BUY" || signal == "📉 SELL" {
                                                         let side = if signal == "🚀 BUY" { '1' } else { '2' };
-                                                        let cl_ord_id = id_factory.next_id();
-                                                        let mut order_buffer = Vec::new();
+                                                        let qty = 1000.0;
 
-                                                        engine.build_order_request(
-                                                            &mut order_buffer,
-                                                            &sender_id,
-                                                            &target_id,
-                                                            seq_num,
-                                                            &cl_ord_id,
-                                                            "1", // Símbolo para EURUSD en cTrader (o el que corresponda)
-                                                            side,
-                                                            1000.0 // Cantidad mínima (ej: 1000 unidades / 0.01 lotes)
-                                                        );
+                                                        if risk_manager.validate_execution(qty) {
+                                                            let cl_ord_id = id_factory.next_id();
+                                                            let mut order_buffer = Vec::new();
+                                                            
+                                                            engine.build_order_request(
+                                                                &mut order_buffer,
+                                                                &sender_id,
+                                                                &target_id,
+                                                                seq_num,
+                                                                &cl_ord_id,
+                                                                "1", 
+                                                                side,
+                                                                qty
+                                                            );
 
-                                                        let fix_msg = String::from_utf8_lossy(&order_buffer).replace('\x01', "|");
-                                                        info!("📦 ORDEN GENERADA (Pendiente envío): {}", fix_msg);
-                                                        // seq_num += 1; // Habilitar esto cuando realmente enviemos por el socket
+                                                            let fix_msg = String::from_utf8_lossy(&order_buffer).replace('\x01', "|");
+                                                            info!("📦 ORDEN APROBADA POR RISK MANAGER: {}", fix_msg);
+                                                            
+                                                            // Bloqueamos el estado para evitar ráfagas
+                                                            risk_manager.set_status(TradeStatus::PendingNew);
+                                                            
+                                                            // Nota: El seq_num se incrementará cuando enviemos realmente en la Fase 4-03
+                                                            // seq_num += 1; 
+                                                        } else {
+                                                            // Solo logueamos el rechazo si no es por estar ya en una posición (para no inundar el log)
+                                                            if risk_manager.status == TradeStatus::Idle {
+                                                                warn!("⚠️ SEÑAL {} RECHAZADA POR COOLDOWN O LÍMITES", signal);
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -202,4 +223,3 @@ fn extract_tag(msg: &str, tag: &str) -> Option<f64> {
     }
     None
 }
-

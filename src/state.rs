@@ -1,5 +1,14 @@
 use std::collections::BTreeMap;
 
+/// Representa los estados posibles de nuestra operación en el mercado.
+/// Crucial para el RiskManager (Fase 4-02).
+#[derive(Debug, PartialEq, Clone)]
+pub enum TradeStatus {
+    Idle,       // Sin posiciones abiertas, listos para operar.
+    PendingNew, // Orden enviada, esperando confirmación del Broker (Execution Report).
+    Filled,     // Posición abierta y activa.
+}
+
 pub struct OrderBook {
     pub bids: BTreeMap<i64, f64>, // Precio (escalado a i64) -> Volumen
     pub asks: BTreeMap<i64, f64>,
@@ -44,7 +53,7 @@ impl OrderBook {
         self.asks.keys().next().map(|&p| p as f64 / 100000.0)
     }
 
-    /// Imbalance simple (Nivel 1) para compatibilidad
+    /// Imbalance simple (Nivel 1)
     pub fn get_imbalance(&self) -> f64 {
         let b_vol = self.bids.values().next().unwrap_or(&0.0);
         let a_vol = self.asks.values().next().unwrap_or(&0.0);
@@ -60,11 +69,7 @@ impl OrderBook {
         total_bid + total_ask
     }
 
-    // --- NUEVA FUNCIÓN PARA LA F3-05 ---
-
     /// Extrae un vector de imbalance por niveles (Profundidad).
-    /// Si pides 3 niveles, devolverá [Imbalance_N1, Imbalance_N2, Imbalance_N3].
-    /// Esto permite que la Red Neuronal detecte "paredes" ocultas.
     pub fn get_depth_vector(&self, levels: usize) -> Vec<f64> {
         let mut depth_v = Vec::with_capacity(levels);
 
