@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 pub struct OrderBook {
-    pub bids: BTreeMap<i64, f64>,
+    pub bids: BTreeMap<i64, f64>, // Precio (escalado a i64 para precisión) -> Volumen
     pub asks: BTreeMap<i64, f64>,
 }
 
@@ -13,37 +13,28 @@ impl OrderBook {
         }
     }
 
-    fn scale_price(price: f64) -> i64 {
-        (price * 100000.0).round() as i64
+    /// Actualiza el libro. side: '0'=Bid, '1'=Ask. action: '1'=Update/Insert, '2'=Delete
+    pub fn update(&mut self, action: char, side: char, price: f64, volume: f64) {
+        let p_key = (price * 100000.0) as i64;
+        if side == '0' {
+            if action == '2' || volume == 0.0 {
+                self.bids.remove(&p_key);
+            } else {
+                self.bids.insert(p_key, volume);
+            }
+        } else {
+            if action == '2' || volume == 0.0 {
+                self.asks.remove(&p_key);
+            } else {
+                self.asks.insert(p_key, volume);
+            }
+        }
     }
 
-    pub fn update(&mut self, action: char, side: char, price: f64, volume: f64) {
-        let scaled_price = Self::scale_price(price);
-
-        // 1. Determinar el mapa objetivo y el mapa opuesto
-        let (target_map, opposite_map) = if side == '0' {
-            (&mut self.bids, &mut self.asks)
-        } else {
-            (&mut self.asks, &mut self.bids)
-        };
-
-        match action {
-            '0' | '1' => {
-                // New o Change
-                if volume > 0.0 {
-                    target_map.insert(scaled_price, volume);
-                    // 2. Limpieza de libro cruzado:
-                    opposite_map.remove(&scaled_price);
-                } else {
-                    target_map.remove(&scaled_price);
-                }
-            }
-            '2' => {
-                // Delete
-                target_map.remove(&scaled_price);
-            }
-            _ => {}
-        }
+    pub fn get_mid_price(&self) -> Option<f64> {
+        let best_bid = self.bids.keys().rev().next()?;
+        let best_ask = self.asks.keys().next()?;
+        Some((*best_bid as f64 + *best_ask as f64) / 200000.0)
     }
 
     pub fn get_best_bid(&self) -> Option<f64> {
@@ -54,24 +45,20 @@ impl OrderBook {
         self.asks.keys().next().map(|&p| p as f64 / 100000.0)
     }
 
-    /// Calcula el Mid-Price: (Best Bid + Best Ask) / 2
-    /// Vital para calcular la volatilidad en la Fase 3.
-    pub fn get_mid_price(&self) -> Option<f64> {
-        let bid = self.get_best_bid()?;
-        let ask = self.get_best_ask()?;
-        Some((bid + ask) / 2.0)
+    pub fn get_imbalance(&self) -> f64 {
+        let b_vol = self.bids.values().next().unwrap_or(&0.0);
+        let a_vol = self.asks.values().next().unwrap_or(&0.0);
+        if b_vol + a_vol == 0.0 {
+            return 0.0;
+        }
+        (b_vol - a_vol) / (b_vol + a_vol)
     }
 
-    pub fn get_imbalance(&self) -> f64 {
-        let total_bid_vol: f64 = self.bids.values().sum();
-        let total_ask_vol: f64 = self.asks.values().sum();
-        let total_vol = total_bid_vol + total_ask_vol;
-
-        if total_vol > 0.0 {
-            (total_bid_vol - total_ask_vol) / total_vol
-        } else {
-            0.0
-        }
+    /// MÉTRICA NUEVA: Intensidad total del libro (Liquidez total visible)
+    pub fn get_book_intensity(&self) -> f64 {
+        let total_bid: f64 = self.bids.values().sum();
+        let total_ask: f64 = self.asks.values().sum();
+        total_bid + total_ask
     }
 }
 
