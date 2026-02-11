@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 pub struct OrderBook {
-    pub bids: BTreeMap<i64, f64>, // Precio (escalado a i64 para precisión) -> Volumen
+    pub bids: BTreeMap<i64, f64>, // Precio (escalado a i64) -> Volumen
     pub asks: BTreeMap<i64, f64>,
 }
 
@@ -13,7 +13,6 @@ impl OrderBook {
         }
     }
 
-    /// Actualiza el libro. side: '0'=Bid, '1'=Ask. action: '1'=Update/Insert, '2'=Delete
     pub fn update(&mut self, action: char, side: char, price: f64, volume: f64) {
         let p_key = (price * 100000.0) as i64;
         if side == '0' {
@@ -45,6 +44,7 @@ impl OrderBook {
         self.asks.keys().next().map(|&p| p as f64 / 100000.0)
     }
 
+    /// Imbalance simple (Nivel 1) para compatibilidad
     pub fn get_imbalance(&self) -> f64 {
         let b_vol = self.bids.values().next().unwrap_or(&0.0);
         let a_vol = self.asks.values().next().unwrap_or(&0.0);
@@ -54,11 +54,35 @@ impl OrderBook {
         (b_vol - a_vol) / (b_vol + a_vol)
     }
 
-    /// MÉTRICA NUEVA: Intensidad total del libro (Liquidez total visible)
     pub fn get_book_intensity(&self) -> f64 {
         let total_bid: f64 = self.bids.values().sum();
         let total_ask: f64 = self.asks.values().sum();
         total_bid + total_ask
+    }
+
+    // --- NUEVA FUNCIÓN PARA LA F3-05 ---
+
+    /// Extrae un vector de imbalance por niveles (Profundidad).
+    /// Si pides 3 niveles, devolverá [Imbalance_N1, Imbalance_N2, Imbalance_N3].
+    /// Esto permite que la Red Neuronal detecte "paredes" ocultas.
+    pub fn get_depth_vector(&self, levels: usize) -> Vec<f64> {
+        let mut depth_v = Vec::with_capacity(levels);
+
+        let mut bid_iter = self.bids.values().rev();
+        let mut ask_iter = self.asks.values();
+
+        for _ in 0..levels {
+            let b_vol = bid_iter.next().unwrap_or(&0.0);
+            let a_vol = ask_iter.next().unwrap_or(&0.0);
+
+            let imb = if b_vol + a_vol == 0.0 {
+                0.0
+            } else {
+                (b_vol - a_vol) / (b_vol + a_vol)
+            };
+            depth_v.push(imb);
+        }
+        depth_v
     }
 }
 
