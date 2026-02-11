@@ -8,30 +8,33 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::{interval, Duration};
 
 mod bayesian;
-mod brain; // Cambiado de model a brain
+mod brain;
 mod features;
 mod fix_engine;
 mod gaussian;
+mod id_gen;
 mod network;
-mod state;
+mod state; // NUEVO MODULO
 
 use bayesian::BayesianNetwork;
 use brain::BayesianBrain;
 use features::FeatureCollector;
 use gaussian::GaussianFilter;
-use state::OrderBook;
+use id_gen::IdGenerator;
+use state::OrderBook; // NUEVA ESTRUCTURA
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
     env_logger::init();
 
-    info!("=== MOTOR FIX v1.3.0 - BAYESIAN BRAIN ACTIVE ===");
+    info!("=== MOTOR FIX v1.4.0 - ORDER FACTORY ACTIVE ===");
 
     // 1. Inicialización de Componentes
     let mut engine = fix_engine::FixEngine::new();
     let mut order_book = OrderBook::new();
     let mut collector = FeatureCollector::new(100);
+    let id_factory = IdGenerator::new(); // INSTANCIA DEL GENERADOR DE IDS
 
     // Arquitectura: 7 Inputs (Price, Vel, Noise, Context + 3 Depth Imbalances), 12 Hidden, 0.01 LR
     let mut brain = BayesianBrain::new(7, 12, 0.01);
@@ -110,14 +113,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     msg_count += 1;
                                     g_filter.add_price(mid);
 
-                                    // 1. Obtener métricas de filtros
                                     let spread = (order_book.get_best_ask().unwrap_or(mid) - order_book.get_best_bid().unwrap_or(mid)).abs() * 100000.0;
                                     let imbalance = order_book.get_imbalance();
                                     let intensity = order_book.get_book_intensity();
                                     let noise = g_filter.compute_uncertainty();
                                     let context = bayes_net.compute_context_score(spread, current_velocity, imbalance, intensity);
 
-                                    // 2. Velocidad de Ticks
                                     let elapsed = last_velocity_calc.elapsed().as_secs_f64();
                                     if elapsed >= 1.0 {
                                         current_velocity = tick_count / elapsed;
@@ -125,7 +126,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         last_velocity_calc = Instant::now();
                                     }
 
-                                    // 3. Empaquetar características (Incluye profundidad de 3 niveles)
                                     collector.push_features(&order_book, current_velocity, noise, context);
                                     let norm_v = collector.get_standardized_vector();
 
@@ -134,15 +134,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                         if prediction_queue.len() > 5 {
                                             if let Some((old_features, old_price)) = prediction_queue.pop_front() {
-                                                // Entrenamiento Online
                                                 let target = if mid > old_price { 1.0 } else { 0.0 };
                                                 brain.train(&old_features, target);
 
                                                 if msg_count % 5 == 0 {
-                                                    // Predicción Bayesiana con Incertidumbre Epistémica
                                                     let (prob, brain_uncertainty) = brain.predict_with_uncertainty(&norm_v);
 
-                                                    // Lógica de Veredicto
                                                     let is_safe = noise < 0.70;
                                                     let is_sane = bayes_net.is_context_favorable(context);
                                                     let brain_conflicts = brain_uncertainty > 0.85;
@@ -157,6 +154,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                                     info!("P: {:.1}% | B-UNCER: {:.2} | RUIDO: {:.2} | CTXT: {:.2} | [{}]",
                                                           prob * 100.0, brain_uncertainty, noise, context, signal);
+
+                                                    // --- SIMULACIÓN DE FÁBRICA DE ÓRDENES ---
+                                                    if signal == "🚀 BUY" || signal == "📉 SELL" {
+                                                        let side = if signal == "🚀 BUY" { '1' } else { '2' };
+                                                        let cl_ord_id = id_factory.next_id();
+                                                        let mut order_buffer = Vec::new();
+
+                                                        engine.build_order_request(
+                                                            &mut order_buffer,
+                                                            &sender_id,
+                                                            &target_id,
+                                                            seq_num,
+                                                            &cl_ord_id,
+                                                            "1", // Símbolo para EURUSD en cTrader (o el que corresponda)
+                                                            side,
+                                                            1000.0 // Cantidad mínima (ej: 1000 unidades / 0.01 lotes)
+                                                        );
+
+                                                        let fix_msg = String::from_utf8_lossy(&order_buffer).replace('\x01', "|");
+                                                        info!("📦 ORDEN GENERADA (Pendiente envío): {}", fix_msg);
+                                                        // seq_num += 1; // Habilitar esto cuando realmente enviemos por el socket
+                                                    }
                                                 }
                                             }
                                         }
@@ -183,3 +202,4 @@ fn extract_tag(msg: &str, tag: &str) -> Option<f64> {
     }
     None
 }
+

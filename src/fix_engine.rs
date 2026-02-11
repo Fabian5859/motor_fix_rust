@@ -87,26 +87,62 @@ impl FixEngine {
         msg.set_any(TagU16::new(52).unwrap(), now.as_bytes());
 
         msg.set_any(TagU16::new(262).unwrap(), b"REQ_GAUSS_01");
-        msg.set_any(TagU16::new(263).unwrap(), b"1"); // Snapshot + Updates
-
-        // --- EL CAMBIO CLAVE ---
-        // b"0" = Full Book / Profundidad Total.
-        // Esto suele forzar al broker a enviar el tag 271 (Volumen).
+        msg.set_any(TagU16::new(263).unwrap(), b"1");
         msg.set_any(TagU16::new(264).unwrap(), b"0");
+        msg.set_any(TagU16::new(265).unwrap(), b"1");
+        msg.set_any(TagU16::new(267).unwrap(), b"2");
 
-        msg.set_any(TagU16::new(265).unwrap(), b"1"); // Incremental Refresh
-
-        msg.set_any(TagU16::new(267).unwrap(), b"2"); // Número de MDEntryTypes
-
-        // Aquí definimos los tipos que queremos (Bid y Ask)
-        // Nota: fefix manejará los grupos repetitivos internamente al wrappear
         msg.set_any(TagU16::new(269).unwrap(), b"0");
         msg.set_any(TagU16::new(269).unwrap(), b"1");
 
-        msg.set_any(TagU16::new(146).unwrap(), b"1"); // NoRelatedSym
+        msg.set_any(TagU16::new(146).unwrap(), b"1");
         msg.set_any(TagU16::new(55).unwrap(), symbol.as_bytes());
 
         msg.wrap();
     }
-}
 
+    // --- NUEVO: MÉTODO DE LA FASE 4-01 ---
+
+    pub fn build_order_request(
+        &mut self,
+        buffer: &mut Vec<u8>,
+        sender_id: &str,
+        target_id: &str,
+        seq_num: u64,
+        cl_ord_id: &str,
+        symbol: &str,
+        side: char, // '1' = Buy, '2' = Sell
+        qty: f64,
+    ) {
+        let now = Utc::now().format("%Y%m%d-%H:%M:%S").to_string();
+        buffer.clear();
+
+        let mut msg = self.encoder.start_message(b"FIX.4.4", buffer, b"D");
+
+        // Header
+        msg.set_any(TagU16::new(49).unwrap(), sender_id.as_bytes());
+        msg.set_any(TagU16::new(56).unwrap(), target_id.as_bytes());
+        msg.set_any(
+            TagU16::new(34).unwrap(),
+            ToString::to_string(&seq_num).as_bytes(),
+        );
+        msg.set_any(TagU16::new(52).unwrap(), now.as_bytes());
+
+        // Order Body
+        msg.set_any(TagU16::new(11).unwrap(), cl_ord_id.as_bytes()); // ClOrdID
+        msg.set_any(TagU16::new(21).unwrap(), b"1"); // HandlInst (Automated)
+        msg.set_any(TagU16::new(55).unwrap(), symbol.as_bytes()); // Symbol
+        msg.set_any(TagU16::new(54).unwrap(), &[side as u8]); // Side (1=Buy, 2=Sell)
+        msg.set_any(TagU16::new(60).unwrap(), now.as_bytes()); // TransactTime
+        msg.set_any(
+            TagU16::new(38).unwrap(),
+            ToString::to_string(&qty).as_bytes(),
+        );
+        msg.set_any(TagU16::new(40).unwrap(), b"1"); // OrdType (1=Market)
+
+        // Time In Force: 1 = GTC (Good Till Cancel)
+        msg.set_any(TagU16::new(59).unwrap(), b"1");
+
+        msg.wrap();
+    }
+}
