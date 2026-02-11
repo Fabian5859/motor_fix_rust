@@ -9,26 +9,32 @@ use tokio::time::{Duration, interval};
 
 mod features;
 mod fix_engine;
+mod gaussian;
 mod model;
 mod network;
-mod state;
+mod state; // Nuevo módulo
 
 use features::FeatureCollector;
+use gaussian::GaussianFilter;
 use model::LogisticModel;
-use state::OrderBook;
+use state::OrderBook; // Importación del filtro
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
     env_logger::init();
 
-    info!("=== MOTOR FIX v1.0.0 - IA ONLINE LEARNING ===");
+    info!("=== MOTOR FIX v1.1.0 - GAUSSIAN FILTER ENABLED ===");
 
-    // 1. Inicialización
+    // 1. Inicialización de Componentes
     let mut engine = fix_engine::FixEngine::new();
     let mut order_book = OrderBook::new();
     let mut collector = FeatureCollector::new(100);
-    let mut ai_model = LogisticModel::new(4, 0.05); // LR ligeramente más alto para ver cambios rápidos
+    let mut ai_model = LogisticModel::new(4, 0.05);
+
+    // Filtro Gaussiano: Ventana de 20 precios, suavizado 1.5, varianza 1.0
+    let mut g_filter = GaussianFilter::new(20, 1.5, 1.0);
+
     let mut prediction_queue = VecDeque::new();
 
     let mut last_velocity_calc = Instant::now();
@@ -87,10 +93,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             if content.is_empty() { continue; }
                             let msg = content.replace('\x01', "|");
 
-                            // Log de tipo de mensaje para diagnóstico
-                            let msg_type = extract_tag(&msg, "35");
-
-                            // Solo procesamos Market Data (35=W o 35=X)
                             if msg.contains("|35=W|") || msg.contains("|35=X|") {
                                 let entries: Vec<&str> = msg.split("|279=").collect();
 
@@ -106,6 +108,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                 if let Some(mid) = order_book.get_mid_price() {
                                     msg_count += 1;
+
+                                    // --- FILTRO GAUSSIANO (ACTUALIZACIÓN) ---
+                                    g_filter.add_price(mid);
+                                    let uncertainty = g_filter.compute_uncertainty();
 
                                     // 1. Características base
                                     mid_price_history.push(mid);
@@ -126,10 +132,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     collector.push_features(&order_book, current_velocity, volatility);
                                     let norm_v = collector.get_standardized_vector();
 
-                                    // 3. APRENDIZAJE ONLINE
+                                    // 3. APRENDIZAJE Y PREDICCIÓN CON FILTRO
                                     prediction_queue.push_back((norm_v.clone(), mid));
 
-                                    // Procesar entrenamiento cuando la cola tiene al menos 5 mensajes (horizonte corto)
                                     if prediction_queue.len() > 5 {
                                         if let Some((old_features, old_price)) = prediction_queue.pop_front() {
                                             let target = if mid > old_price { 1.0 } else { 0.0 };
@@ -137,8 +142,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                             if msg_count % 5 == 0 {
                                                 let prob = ai_model.predict(&norm_v);
-                                                info!("🤖 PRED: {:.1}% ALZA | LOSS: {:.4} | W: {:.2?}",
-                                                    prob * 100.0, loss, ai_model.weights.to_vec());
+
+                                                // --- LÓGICA DE DECISIÓN CON GAUSSIANO ---
+                                                let status = if uncertainty > 0.70 { "🚫 RUIDO ALTO" } else { "✅ SEGURO" };
+
+                                                info!("🤖 PRED: {:.1}% ALZA | RUIDO: {:.2} ({}) | LOSS: {:.4}",
+                                                    prob * 100.0, uncertainty, status, loss);
                                             }
                                         }
                                     }
@@ -146,6 +155,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             } else if msg.contains("|35=0|") {
                                 // Heartbeat silencioso
                             } else {
+                                let msg_type = extract_tag(&msg, "35");
                                 info!("📩 FIX Msg Type: {:?}", msg_type);
                             }
                         }
