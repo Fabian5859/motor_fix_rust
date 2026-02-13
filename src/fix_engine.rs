@@ -55,12 +55,13 @@ impl FixEngine {
         let now = Utc::now().format("%Y%m%d-%H:%M:%S").to_string();
         buffer.clear();
         let mut msg = self.encoder.start_message(b"FIX.4.4", buffer, b"0");
+
         msg.set_any(TagU16::new(49).unwrap(), sender_id.as_bytes());
         msg.set_any(TagU16::new(56).unwrap(), target_id.as_bytes());
-        msg.set_any(
-            TagU16::new(34).unwrap(),
-            ToString::to_string(&seq_num).as_bytes(),
-        );
+
+        let seq_str = format!("{}", seq_num);
+        msg.set_any(TagU16::new(34).unwrap(), seq_str.as_bytes());
+
         msg.set_any(TagU16::new(52).unwrap(), now.as_bytes());
         msg.wrap();
     }
@@ -80,18 +81,19 @@ impl FixEngine {
 
         msg.set_any(TagU16::new(49).unwrap(), sender_id.as_bytes());
         msg.set_any(TagU16::new(56).unwrap(), target_id.as_bytes());
-        msg.set_any(
-            TagU16::new(34).unwrap(),
-            ToString::to_string(&seq_num).as_bytes(),
-        );
-        msg.set_any(TagU16::new(52).unwrap(), now.as_bytes());
 
-        msg.set_any(TagU16::new(262).unwrap(), b"REQ_GAUSS_01");
+        let seq_str = format!("{}", seq_num);
+        msg.set_any(TagU16::new(34).unwrap(), seq_str.as_bytes());
+
+        msg.set_any(TagU16::new(52).unwrap(), now.as_bytes());
+        msg.set_any(TagU16::new(57).unwrap(), b"QUOTE");
+
+        msg.set_any(TagU16::new(262).unwrap(), b"REQ_DEEP_LOB");
         msg.set_any(TagU16::new(263).unwrap(), b"1");
         msg.set_any(TagU16::new(264).unwrap(), b"0");
         msg.set_any(TagU16::new(265).unwrap(), b"1");
-        msg.set_any(TagU16::new(267).unwrap(), b"2");
 
+        msg.set_any(TagU16::new(267).unwrap(), b"2");
         msg.set_any(TagU16::new(269).unwrap(), b"0");
         msg.set_any(TagU16::new(269).unwrap(), b"1");
 
@@ -101,8 +103,6 @@ impl FixEngine {
         msg.wrap();
     }
 
-    // --- NUEVO: MÉTODO DE LA FASE 4-01 ---
-
     pub fn build_order_request(
         &mut self,
         buffer: &mut Vec<u8>,
@@ -111,7 +111,7 @@ impl FixEngine {
         seq_num: u64,
         cl_ord_id: &str,
         symbol: &str,
-        side: char, // '1' = Buy, '2' = Sell
+        side: char,
         qty: f64,
     ) {
         let now = Utc::now().format("%Y%m%d-%H:%M:%S").to_string();
@@ -119,30 +119,27 @@ impl FixEngine {
 
         let mut msg = self.encoder.start_message(b"FIX.4.4", buffer, b"D");
 
-        // Header
         msg.set_any(TagU16::new(49).unwrap(), sender_id.as_bytes());
         msg.set_any(TagU16::new(56).unwrap(), target_id.as_bytes());
-        msg.set_any(
-            TagU16::new(34).unwrap(),
-            ToString::to_string(&seq_num).as_bytes(),
-        );
+
+        let seq_str = format!("{}", seq_num);
+        msg.set_any(TagU16::new(34).unwrap(), seq_str.as_bytes());
+
         msg.set_any(TagU16::new(52).unwrap(), now.as_bytes());
+        msg.set_any(TagU16::new(57).unwrap(), b"TRADE");
 
-        // Order Body
-        msg.set_any(TagU16::new(11).unwrap(), cl_ord_id.as_bytes()); // ClOrdID
-        msg.set_any(TagU16::new(21).unwrap(), b"1"); // HandlInst (Automated)
-        msg.set_any(TagU16::new(55).unwrap(), symbol.as_bytes()); // Symbol
-        msg.set_any(TagU16::new(54).unwrap(), &[side as u8]); // Side (1=Buy, 2=Sell)
-        msg.set_any(TagU16::new(60).unwrap(), now.as_bytes()); // TransactTime
-        msg.set_any(
-            TagU16::new(38).unwrap(),
-            ToString::to_string(&qty).as_bytes(),
-        );
-        msg.set_any(TagU16::new(40).unwrap(), b"1"); // OrdType (1=Market)
+        msg.set_any(TagU16::new(11).unwrap(), cl_ord_id.as_bytes());
+        msg.set_any(TagU16::new(55).unwrap(), symbol.as_bytes());
+        msg.set_any(TagU16::new(54).unwrap(), &[side as u8]);
+        msg.set_any(TagU16::new(60).unwrap(), now.as_bytes());
 
-        // Time In Force: 1 = GTC (Good Till Cancel)
+        let qty_str = format!("{}", qty);
+        msg.set_any(TagU16::new(38).unwrap(), qty_str.as_bytes());
+
+        msg.set_any(TagU16::new(40).unwrap(), b"1");
         msg.set_any(TagU16::new(59).unwrap(), b"1");
 
         msg.wrap();
     }
 }
+

@@ -1,12 +1,15 @@
 use std::collections::BTreeMap;
 
-/// Representa los estados posibles de nuestra operación en el mercado.
-/// Crucial para el RiskManager (Fase 4-02).
+/// Representa el ciclo de vida completo de una orden según el protocolo FIX.
+/// Crucial para el Executor (Fase 4-03) y el RiskManager (Fase 4-02).
 #[derive(Debug, PartialEq, Clone)]
 pub enum TradeStatus {
-    Idle,       // Sin posiciones abiertas, listos para operar.
-    PendingNew, // Orden enviada, esperando confirmación del Broker (Execution Report).
-    Filled,     // Posición abierta y activa.
+    Idle,            // Sin posiciones abiertas, listos para operar.
+    PendingNew,      // 35=D enviada, esperando confirmación inicial del Broker.
+    New,             // El broker ha aceptado la orden (ACK) y está en el libro.
+    PartiallyFilled, // La orden se ha ejecutado en parte.
+    Filled,          // Posición abierta y activa al 100%.
+    Rejected,        // La orden fue rechazada por el broker o el motor de riesgo.
 }
 
 pub struct OrderBook {
