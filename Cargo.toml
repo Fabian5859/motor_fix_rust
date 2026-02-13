@@ -1,29 +1,33 @@
 [package]
 name = "motor_fix_rust"
 version = "0.1.0"
-edition = "2021" # Nota: He ajustado a 2021 que es la estable más común, o mantén 2024 si usas el canal nightly.
+edition = "2021"
 
 [dependencies]
 # --- INFRAESTRUCTURA ---
 log = "0.4"
-env_logger = "0.10"
+env_logger = "0.11" # Actualizado para mejor compatibilidad con tokio 1.0
 dotenv = "0.15.0"
-tokio = { version = "1.0", features = ["full"]}
-fefix = { version = "0.7", features = ["full"]}
+tokio = { version = "1.0", features = ["full"] }
 chrono = "0.4"
+# Nota: Si usas fefix para parsing manual, mantén 0.7. Si usas tu propio motor, podrías omitirlo.
+fefix = { version = "0.7", features = ["full"] }
 
-# --- FASE 3: MACHINE LEARNING & MATH ---
-# Estructuras de datos para álgebra lineal
-ndarray = "0.16.0"
+# --- FASE 3/4: MACHINE LEARNING & MATH ---
+# Algebra lineal con soporte para funciones matemáticas
+ndarray = { version = "0.16.0", features = ["serde"] }
 
-# Extensión para generar matrices aleatorias (Vital para BayesianBrain)
-# Usamos versiones que se hablan correctamente entre sí
+# Vital: ndarray-rand 0.15 requiere rand 0.8
 ndarray-rand = "0.15.0" 
-rand_distr = "0.4.3"
 rand = "0.8.5"
+rand_distr = "0.4.3"
 
-# Traits para cálculos numéricos genéricos
-num-traits = "0.2.19"
+# Necesario para funciones como .ln() y .sqrt() en contextos genéricos
+num-traits = "0.2"
 
-# Ventanas rodantes y estadísticas
+# Gestión de series temporales para Features
 ringbuffer = "0.15.0"
+
+# --- SERIALIZACIÓN (Opcional pero recomendada para guardar el cerebro) ---
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

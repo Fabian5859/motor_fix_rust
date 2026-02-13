@@ -1,64 +1,136 @@
 use crate::risk::RiskManager;
-use crate::state::TradeStatus;
+use crate::state::{Position, TradeStatus};
 use log::{error, info, warn};
 
-pub struct Executor;
+pub struct Executor {
+    pub active_position: Option<Position>,
+}
 
 impl Executor {
-    /// Procesa mensajes del broker, buscando específicamente Execution Reports (35=8)
-    /// y actualiza el estado del RiskManager en consecuencia.
-    pub fn handle_execution_report(msg: &str, risk_manager: &mut RiskManager) {
-        // Verificamos que sea un Execution Report
-        if !msg.contains("35=8") {
+    pub fn new() -> Self {
+        Self {
+            active_position: None,
+        }
+    }
+
+    pub fn monitor_position(
+        &mut self,
+        current_mid: f64,
+        current_sigma: f64,
+        risk_manager: &mut RiskManager,
+    ) -> bool {
+        let pos = match &self.active_position {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let trigger_exit = if pos.side == '1' {
+            current_mid >= pos.tp_price || current_mid <= pos.sl_price
+        } else {
+            current_mid <= pos.tp_price || current_mid >= pos.sl_price
+        };
+
+        if trigger_exit {
+            info!("[EXECUTOR] 🎯 Salida por niveles detectada (TP/SL).");
+            return true;
+        }
+
+        if current_sigma > (pos.entry_sigma_total * risk_manager.lambda_epistemic) {
+            warn!("[EXECUTOR] ⚠️ Tesis invalidada por alta incertidumbre (Sigma Spike).");
+            return true;
+        }
+
+        false
+    }
+
+    pub fn handle_execution_report(
+        &mut self,
+        msg: &str,
+        risk_manager: &mut RiskManager,
+        pending_thesis: &mut Option<Position>, // Cambiado a mut para poder limpiar la tesis
+    ) {
+        // --- 1. EXTRACCIÓN DE TAGS CRÍTICOS ---
+        let tags: std::collections::HashMap<&str, &str> = msg
+            .split('|')
+            .filter_map(|s| {
+                let mut parts = s.splitn(2, '=');
+                Some((parts.next()?, parts.next()?))
+            })
+            .collect();
+
+        let msg_type = tags.get("35").unwrap_or(&"");
+        let cl_ord_id = tags.get("11").unwrap_or(&"");
+        let ord_status = tags.get("39").unwrap_or(&"");
+        let text = tags.get("58").unwrap_or(&"Sin detalle");
+
+        // --- 2. MANEJO DE REJECTS DE NEGOCIO (35=j) O EJECUCIÓN (39=8) ---
+        if *msg_type == "j" || *ord_status == "8" {
+            error!(
+                "[EXECUTOR] ❌ ORDEN RECHAZADA. Razón: {}. ID: {}",
+                text, cl_ord_id
+            );
+
+            // Si el rechazo es sobre nuestra tesis pendiente, limpiamos
+            if let Some(thesis) = pending_thesis {
+                if thesis.cl_ord_id == *cl_ord_id {
+                    risk_manager.set_status(TradeStatus::Idle);
+                    *pending_thesis = None;
+                    info!("[EXECUTOR] Tesis descartada. Sistema en Cooldown.");
+                }
+            }
             return;
         }
 
-        info!("[EXECUTOR] 📨 Execution Report recibido. Analizando estado...");
+        // --- 3. MANEJO DE SESSION REJECT (35=3) ---
+        if *msg_type == "3" {
+            error!("[EXECUTOR] 🚨 SESSION REJECT: Error de protocolo. Revisar logs FIX. No se altera posición.");
+            return;
+        }
 
-        // Extraer el OrdStatus (Tag 39)
-        if let Some(status_part) = msg.split('|').find(|s| s.starts_with("39=")) {
-            let status_val = status_part.replace("39=", "");
-
-            match status_val.as_str() {
+        // --- 4. MANEJO DE EXECUTION REPORTS (35=8) ---
+        if *msg_type == "8" {
+            match *ord_status {
                 "0" => {
-                    info!("[EXECUTOR] ✅ Orden aceptada por el Broker (Status: NEW)");
+                    // NEW
+                    info!("[EXECUTOR] ✅ Orden aceptada en servidor: {}", cl_ord_id);
                     risk_manager.set_status(TradeStatus::New);
                 }
-                "1" => {
-                    info!("[EXECUTOR] ⚠️ Ejecución Parcial (Status: PARTIALLY_FILLED)");
-                    risk_manager.set_status(TradeStatus::PartiallyFilled);
-                }
                 "2" => {
-                    info!("[EXECUTOR] 🎯 ORDEN TOTALMENTE EJECUTADA (Status: FILLED)");
-                    risk_manager.set_status(TradeStatus::Filled);
+                    // FILLED
+                    // VALIDACIÓN DE IDENTIDAD
+                    if let Some(thesis) = pending_thesis {
+                        if thesis.cl_ord_id == *cl_ord_id {
+                            info!(
+                                "[EXECUTOR] 🎯 FILL CONFIRMADO para ID: {}. Activando tracking.",
+                                cl_ord_id
+                            );
+                            risk_manager.set_status(TradeStatus::Filled);
+                            self.active_position = Some(thesis.clone());
+                            *pending_thesis = None; // Limpiamos la tesis una vez activa
+                        } else {
+                            warn!(
+                                "[EXECUTOR] ⚠️ Recibido Fill para ClOrdID ajeno: {}. Ignorando.",
+                                cl_ord_id
+                            );
+                        }
+                    }
                 }
                 "4" | "C" => {
-                    warn!("[EXECUTOR] 🛑 Orden cancelada/Expirada.");
+                    // CANCELLED o EXPIRED
+                    info!("[EXECUTOR] 🛑 Orden cerrada/cancelada. ID: {}", cl_ord_id);
                     risk_manager.set_status(TradeStatus::Idle);
+                    self.active_position = None;
                 }
-                "8" => {
-                    error!("[EXECUTOR] ❌ ORDEN RECHAZADA por el Broker.");
-                    risk_manager.set_status(TradeStatus::Rejected);
-                    // Opcional: Volver a Idle después de un rechazo para permitir re-intento
-                    risk_manager.set_status(TradeStatus::Idle);
-                }
-                _ => {
-                    warn!("[EXECUTOR] ❓ Estado de orden desconocido: {}", status_val);
-                }
+                _ => {}
             }
         }
 
-        // Extraer el OrderID del Broker (Tag 37) para logs de auditoría
-        if let Some(order_id_part) = msg.split('|').find(|s| s.starts_with("37=")) {
-            let broker_id = order_id_part.replace("37=", "");
-            info!("[EXECUTOR] ID del Broker asignado: {}", broker_id);
-        }
-    }
-
-    /// Maneja el mensaje OrderCancelReject (35=9)
-    pub fn handle_cancel_reject(msg: &str) {
-        if msg.contains("35=9") {
-            error!("[EXECUTOR] ⚠️ Error al intentar cancelar/modificar orden. El mercado se movió demasiado rápido.");
+        // --- 5. CANCEL REJECT (35=9) ---
+        if *msg_type == "9" {
+            let cxl_rej_reason = tags.get("102").unwrap_or(&"0");
+            warn!("[EXECUTOR] ⚠️ Cancel Reject (ID: {}). Motivo Tag 102: {}. Esperando reporte final.", cl_ord_id, cxl_rej_reason);
+            // No asumimos cierre; esperamos el 35=8 que confirme el estado real.
         }
     }
 }
+

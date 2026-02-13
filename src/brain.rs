@@ -1,14 +1,20 @@
 use ndarray::{Array1, Array2};
 use ndarray_rand::RandomExt;
+use rand::prelude::*;
 use rand_distr::Normal;
 use std::f64::consts::E;
 
+/// Resultado detallado de la inferencia bayesiana
+pub struct BayesianOutput {
+    pub mu: f64,              // Media de la predicción (0.0 a 1.0)
+    pub sigma_epistemic: f64, // Desviación estándar (incertidumbre del modelo)
+    pub snr: f64,             // Signal-to-Noise Ratio
+}
+
 pub struct BayesianBrain {
-    // Pesos (W1: Input -> Hidden, W2: Hidden -> Output)
     weights1: Array2<f64>,
     weights2: Array1<f64>,
-    // Incertidumbre de los pesos (Varianza)
-    variance1: Array2<f64>,
+    variance1: Array2<f64>, // Varianza de los pesos (Incertidumbre epistémica)
     variance2: Array1<f64>,
     learning_rate: f64,
 }
@@ -18,76 +24,92 @@ impl BayesianBrain {
         Self {
             weights1: Array2::random((input_dim, hidden_dim), Normal::new(0.0, 0.1).unwrap()),
             weights2: Array1::random(hidden_dim, Normal::new(0.0, 0.1).unwrap()),
-            variance1: Array2::from_elem((input_dim, hidden_dim), 0.05),
-            variance2: Array1::from_elem(hidden_dim, 0.05),
+            variance1: Array2::from_elem((input_dim, hidden_dim), 0.02),
+            variance2: Array1::from_elem(hidden_dim, 0.02),
             learning_rate: lr,
         }
     }
 
-    /// Activación Sigmoide
     fn sigmoid(&self, x: f64) -> f64 {
         1.0 / (1.0 + E.powf(-x))
     }
 
-    /// Derivada de Sigmoide para Backpropagation
     fn sigmoid_derivative(&self, x: f64) -> f64 {
         let s = self.sigmoid(x);
         s * (1.0 - s)
     }
 
-    /// Forward pass que devuelve (Predicción, Incertidumbre de la Red)
-    pub fn predict_with_uncertainty(&self, inputs: &Array1<f64>) -> (f64, f64) {
+    /// Inferencia por Monte Carlo: Muestrea la red N veces para obtener mu y sigma
+    pub fn predict_bayesian(&self, inputs: &Array1<f64>, samples: usize) -> BayesianOutput {
         if inputs.is_empty() {
-            return (0.5, 1.0);
+            return BayesianOutput {
+                mu: 0.5,
+                sigma_epistemic: 1.0,
+                snr: 0.0,
+            };
         }
 
-        // Capa Oculta
-        let z1 = inputs.dot(&self.weights1);
-        let a1 = z1.mapv(|x| self.sigmoid(x));
+        let mut rng = thread_rng();
+        let mut predictions = Vec::with_capacity(samples);
 
-        // Salida
-        let z2 = a1.dot(&self.weights2);
-        let prediction = self.sigmoid(z2);
+        for _ in 0..samples {
+            // Muestreamos pesos de la última capa para capturar incertidumbre
+            let sampled_w2 = Array1::from_shape_fn(self.weights2.len(), |i| {
+                let dist =
+                    Normal::new(self.weights2[i], self.variance2[i].sqrt().max(1e-6)).unwrap();
+                dist.sample(&mut rng)
+            });
 
-        // Cálculo de Incertidumbre Epistémica (basado en la varianza de los pesos)
-        // A mayor varianza en los pesos internos, mayor incertidumbre en la salida
-        let uncertainty = self.variance1.sum() * 0.1 + self.variance2.sum() * 0.9;
+            let z1 = inputs.dot(&self.weights1);
+            let a1 = z1.mapv(|x| self.sigmoid(x));
+            let z2 = a1.dot(&sampled_w2);
+            predictions.push(self.sigmoid(z2));
+        }
 
-        (prediction, uncertainty.clamp(0.0, 1.0))
+        let mu: f64 = predictions.iter().sum::<f64>() / samples as f64;
+        let var_e: f64 = predictions.iter().map(|p| (p - mu).powi(2)).sum::<f64>() / samples as f64;
+        let sigma_e = var_e.sqrt();
+        let snr = (mu - 0.5).abs() / sigma_e.max(1e-6);
+
+        BayesianOutput {
+            mu,
+            sigma_epistemic: sigma_e,
+            snr,
+        }
     }
 
-    /// Entrenamiento Online (Backpropagation Bayesiano simplificado)
+    /// Entrenamiento Bayesiano Online
     pub fn train(&mut self, inputs: &Array1<f64>, target: f64) {
         if inputs.is_empty() {
             return;
         }
 
-        // 1. Forward
+        // Forward pass
         let z1 = inputs.dot(&self.weights1);
         let a1 = z1.mapv(|x| self.sigmoid(x));
         let z2 = a1.dot(&self.weights2);
         let prediction = self.sigmoid(z2);
 
-        // 2. Cálculo del Error
         let error = prediction - target;
 
-        // 3. Backpropagation para W2
-        let d_w2 = error * self.sigmoid_derivative(z2);
+        // Update W2 y su Varianza
+        let d_z2 = error * self.sigmoid_derivative(z2);
         for i in 0..self.weights2.len() {
-            let grad = d_w2 * a1[i];
+            let grad = d_z2 * a1[i];
             self.weights2[i] -= self.learning_rate * grad;
-            // Reducimos la varianza (ganamos confianza) si el error es pequeño
+            // Si el error es bajo, reducimos varianza (ganamos confianza)
             self.variance2[i] *= 0.99 + (error.abs() * 0.01);
         }
 
-        // 4. Backpropagation para W1
-        let d_z1 = d_w2 * &self.weights2;
+        // Update W1
+        let d_a1 = d_z2 * &self.weights2;
         for i in 0..self.weights1.nrows() {
             for j in 0..self.weights1.ncols() {
-                let grad = d_z1[j] * self.sigmoid_derivative(z1[j]) * inputs[i];
+                let grad = d_a1[j] * self.sigmoid_derivative(z1[j]) * inputs[i];
                 self.weights1[[i, j]] -= self.learning_rate * grad;
                 self.variance1[[i, j]] *= 0.99 + (error.abs() * 0.01);
             }
         }
     }
 }
+
